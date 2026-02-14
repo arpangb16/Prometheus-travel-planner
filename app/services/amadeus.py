@@ -2,6 +2,7 @@ import httpx
 from typing import List, Optional, Dict, Any
 from datetime import date, datetime, timedelta
 from app.config import settings
+from app.services.airline_codes import get_airline_name
 
 
 class AmadeusService:
@@ -12,21 +13,21 @@ class AmadeusService:
     def __init__(self):
         self.client_id = getattr(settings, 'amadeus_client_id', None)
         self.client_secret = getattr(settings, 'amadeus_client_secret', None)
-        self.base_url = "https://test.api.amadeus.com"  # Use test API by default
+        self.base_url = "https://test.api.amadeus.com"  # Test API URL
         self.token_url = f"{self.base_url}/v1/security/oauth2/token"
         self._access_token: Optional[str] = None
-        self._token_expires_at: Optional[datetime] = None
+        self._token_expires_at: Optional[float] = None  # Store as timestamp
     
     async def _get_access_token(self) -> str:
         """Get or refresh Amadeus OAuth2 access token"""
         # Check if we have a valid token
         if self._access_token and self._token_expires_at:
-            if datetime.now() < self._token_expires_at:
+            current_time = datetime.now().timestamp()
+            if current_time < self._token_expires_at:
                 return self._access_token
         
         if not self.client_id or not self.client_secret:
-            # Return empty token - will use mock data
-            return None
+            raise ValueError("Amadeus API credentials are required. Please set AMADEUS_CLIENT_ID and AMADEUS_CLIENT_SECRET in .env file")
         
         try:
             async with httpx.AsyncClient() as client:
@@ -42,13 +43,25 @@ class AmadeusService:
                 response.raise_for_status()
                 data = response.json()
                 self._access_token = data.get("access_token")
+                if not self._access_token:
+                    raise ValueError("Failed to obtain access token from Amadeus API")
                 # Token expires in data.get("expires_in") seconds (usually 1799 = ~30 min)
                 expires_in = data.get("expires_in", 1799)
                 self._token_expires_at = datetime.now().timestamp() + expires_in - 60  # Refresh 1 min early
                 return self._access_token
+        except httpx.HTTPStatusError as e:
+            error_msg = f"Amadeus API authentication failed: {e.response.status_code}"
+            try:
+                error_data = e.response.json()
+                if "error_description" in error_data:
+                    error_msg += f" - {error_data['error_description']}"
+            except:
+                error_msg += f" - {e.response.text}"
+            raise ValueError(error_msg) from e
+        except httpx.RequestError as e:
+            raise ValueError(f"Failed to connect to Amadeus API at {self.token_url}: {str(e)}") from e
         except Exception as e:
-            print(f"Amadeus token error: {e}")
-            return None
+            raise ValueError(f"Amadeus API error: {str(e)}") from e
     
     async def search_flights(
         self,
@@ -62,12 +75,12 @@ class AmadeusService:
         """
         Search for flights using Amadeus API
         Returns list of flight options
+        Raises ValueError if API connection fails
         """
         token = await self._get_access_token()
         
         if not token:
-            # Use mock data if no API credentials
-            return self._get_mock_flights(origin, destination, departure_date, return_date)
+            raise ValueError("Failed to obtain Amadeus API access token")
         
         try:
             async with httpx.AsyncClient() as client:
@@ -105,26 +118,50 @@ class AmadeusService:
                 response.raise_for_status()
                 data = response.json()
                 
+                # Debug: Check response structure
+                if "data" not in data or not data.get("data"):
+                    error_detail = data.get("errors", [])
+                    if error_detail:
+                        error_msg = "; ".join([err.get("detail", str(err)) for err in error_detail])
+                        raise ValueError(f"Amadeus API returned no flight data: {error_msg}")
+                    raise ValueError(f"No flight data in response. Response keys: {list(data.keys())}")
+                
                 # Parse Amadeus response into our format
-                return self._parse_amadeus_response(data, return_date is not None)
+                flights = self._parse_amadeus_response(data, return_date is not None)
+                
+                if not flights or (isinstance(flights, list) and len(flights) == 0):
+                    raise ValueError("No flights found for the given search criteria")
+                
+                return flights
         
-        except httpx.HTTPError as e:
-            print(f"Amadeus API error: {e}")
-            # Fallback to mock data on API errors
-            print("Using mock flight data (Amadeus API unavailable)")
-            return self._get_mock_flights(origin, destination, departure_date, return_date)
+        except httpx.HTTPStatusError as e:
+            error_msg = f"Amadeus API request failed: {e.response.status_code}"
+            try:
+                error_data = e.response.json()
+                if "errors" in error_data:
+                    error_details = "; ".join([err.get("detail", "") for err in error_data["errors"]])
+                    error_msg += f" - {error_details}"
+                elif "error_description" in error_data:
+                    error_msg += f" - {error_data['error_description']}"
+            except:
+                error_msg += f" - {e.response.text}"
+            raise ValueError(error_msg) from e
+        except httpx.RequestError as e:
+            raise ValueError(f"Failed to connect to Amadeus API at {self.base_url}: {str(e)}") from e
+        except ValueError:
+            # Re-raise ValueError (from parsing or validation)
+            raise
         except Exception as e:
-            print(f"Unexpected error in Amadeus service: {e}")
-            # Fallback to mock data on any error
-            print("Using mock flight data due to error")
-            return self._get_mock_flights(origin, destination, departure_date, return_date)
+            raise ValueError(f"Unexpected error in Amadeus flight search: {str(e)}") from e
     
     def _parse_amadeus_response(self, data: Dict[str, Any], is_return: bool = False) -> List[Dict[str, Any]]:
         """Parse Amadeus API response into our standard format"""
         flights = []
+        outbound_flights = []
+        return_flights = []
         
         if "data" not in data:
-            return flights
+            return flights if not is_return else {"outbound": [], "return": []}
         
         for offer in data["data"]:
             # Amadeus returns complex nested structure
@@ -132,56 +169,112 @@ class AmadeusService:
             price = float(offer.get("price", {}).get("total", 0))
             currency = offer.get("price", {}).get("currency", "USD")
             
-            # Get itinerary segments
+            # Get itinerary segments - for return flights, there are typically 2 itineraries
             itineraries = offer.get("itineraries", [])
             
-            for itinerary in itineraries:
-                segments = itinerary.get("segments", [])
-                if not segments:
-                    continue
-                
-                first_segment = segments[0]
-                last_segment = segments[-1]
-                
-                departure_time = datetime.fromisoformat(
-                    first_segment.get("departure", {}).get("at", "").replace("Z", "+00:00")
-                )
-                arrival_time = datetime.fromisoformat(
-                    last_segment.get("arrival", {}).get("at", "").replace("Z", "+00:00")
-                )
-                
-                duration_str = itinerary.get("duration", "")
-                stops = len(segments) - 1
-                
-                # Get airline from first segment
-                carrier_code = first_segment.get("carrierCode", "")
-                flight_number = first_segment.get("number", "")
-                
-                flights.append({
-                    "airline": carrier_code,  # You might want to map this to airline name
-                    "flight_number": f"{carrier_code}{flight_number}",
-                    "origin": first_segment.get("departure", {}).get("iataCode", ""),
-                    "destination": last_segment.get("arrival", {}).get("iataCode", ""),
-                    "departure_time": departure_time.isoformat(),
-                    "arrival_time": arrival_time.isoformat(),
-                    "duration": duration_str,
-                    "price": price,
-                    "currency": currency,
-                    "stops": stops,
-                    "cabin_class": "economy"
-                })
+            if is_return:
+                # For return flights, first itinerary is outbound, second is return
+                for idx, itinerary in enumerate(itineraries):
+                    segments = itinerary.get("segments", [])
+                    if not segments:
+                        continue
+                    
+                    first_segment = segments[0]
+                    last_segment = segments[-1]
+                    
+                    try:
+                        departure_time = datetime.fromisoformat(
+                            first_segment.get("departure", {}).get("at", "").replace("Z", "+00:00")
+                        )
+                        arrival_time = datetime.fromisoformat(
+                            last_segment.get("arrival", {}).get("at", "").replace("Z", "+00:00")
+                        )
+                    except (ValueError, AttributeError) as e:
+                        # Skip invalid date formats
+                        continue
+                    
+                    duration_str = itinerary.get("duration", "")
+                    stops = len(segments) - 1
+                    
+                    # Get airline from first segment
+                    carrier_code = first_segment.get("carrierCode", "")
+                    flight_number = first_segment.get("number", "")
+                    airline_name = get_airline_name(carrier_code)
+                    
+                    flight_data = {
+                        "airline": carrier_code,
+                        "airline_name": airline_name,
+                        "flight_number": f"{carrier_code}{flight_number}",
+                        "origin": first_segment.get("departure", {}).get("iataCode", ""),
+                        "destination": last_segment.get("arrival", {}).get("iataCode", ""),
+                        "departure_time": departure_time.isoformat(),
+                        "arrival_time": arrival_time.isoformat(),
+                        "duration": duration_str,
+                        "price": price,
+                        "currency": currency,
+                        "stops": stops,
+                        "cabin_class": "economy"
+                    }
+                    
+                    if idx == 0:
+                        outbound_flights.append(flight_data)
+                    else:
+                        return_flights.append(flight_data)
+            else:
+                # One-way flight - process first itinerary only
+                if itineraries:
+                    itinerary = itineraries[0]
+                    segments = itinerary.get("segments", [])
+                    if not segments:
+                        continue
+                    
+                    first_segment = segments[0]
+                    last_segment = segments[-1]
+                    
+                    try:
+                        departure_time = datetime.fromisoformat(
+                            first_segment.get("departure", {}).get("at", "").replace("Z", "+00:00")
+                        )
+                        arrival_time = datetime.fromisoformat(
+                            last_segment.get("arrival", {}).get("at", "").replace("Z", "+00:00")
+                        )
+                    except (ValueError, AttributeError) as e:
+                        # Skip invalid date formats
+                        continue
+                    
+                    duration_str = itinerary.get("duration", "")
+                    stops = len(segments) - 1
+                    
+                    # Get airline from first segment
+                    carrier_code = first_segment.get("carrierCode", "")
+                    flight_number = first_segment.get("number", "")
+                    airline_name = get_airline_name(carrier_code)
+                    
+                    flights.append({
+                        "airline": carrier_code,
+                        "airline_name": airline_name,
+                        "flight_number": f"{carrier_code}{flight_number}",
+                        "origin": first_segment.get("departure", {}).get("iataCode", ""),
+                        "destination": last_segment.get("arrival", {}).get("iataCode", ""),
+                        "departure_time": departure_time.isoformat(),
+                        "arrival_time": arrival_time.isoformat(),
+                        "duration": duration_str,
+                        "price": price,
+                        "currency": currency,
+                        "stops": stops,
+                        "cabin_class": "economy"
+                    })
         
-        # Sort by price
-        flights.sort(key=lambda x: x["price"])
-        
-        if is_return and len(flights) > 0:
-            # For return trips, split into outbound and return
-            mid_point = len(flights) // 2
+        if is_return:
+            # Sort by price and return structured format
+            outbound_flights.sort(key=lambda x: x["price"])
+            return_flights.sort(key=lambda x: x["price"])
             return {
-                "outbound": flights[:mid_point] if mid_point > 0 else flights,
-                "return": flights[mid_point:] if mid_point < len(flights) else []
+                "outbound": outbound_flights,
+                "return": return_flights
             }
         
+        flights.sort(key=lambda x: x["price"])
         return flights
     
     def _get_mock_flights(

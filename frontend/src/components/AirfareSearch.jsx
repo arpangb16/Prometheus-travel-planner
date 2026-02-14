@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react'
+import DatePicker from 'react-datepicker'
+import 'react-datepicker/dist/react-datepicker.css'
 import { airfareAPI, tripsAPI } from '../api'
+import AirportAutocomplete from './AirportAutocomplete'
 import './AirfareSearch.css'
 
 function AirfareSearch() {
@@ -9,12 +12,13 @@ function AirfareSearch() {
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState(null)
   const [error, setError] = useState('')
+  const [dateErrors, setDateErrors] = useState({})
 
   // One-way form
   const [oneWayForm, setOneWayForm] = useState({
     origin: '',
     destination: '',
-    departure_date: '',
+    departure_date: null, // Date object for DatePicker
     passengers: 1,
     cabin_class: 'economy',
   })
@@ -23,15 +27,15 @@ function AirfareSearch() {
   const [returnForm, setReturnForm] = useState({
     origin: '',
     destination: '',
-    departure_date: '',
-    return_date: '',
+    departure_date: null, // Date object for DatePicker
+    return_date: null, // Date object for DatePicker
     passengers: 1,
     cabin_class: 'economy',
   })
 
   // Multi-city form
   const [multiCityForm, setMultiCityForm] = useState({
-    segments: [{ origin: '', destination: '', departure_date: '' }],
+    segments: [{ origin: '', destination: '', departure_date: null }], // Date objects
     passengers: 1,
     cabin_class: 'economy',
   })
@@ -51,15 +55,41 @@ function AirfareSearch() {
 
   const handleOneWaySearch = async (e) => {
     e.preventDefault()
-    setLoading(true)
     setError('')
     setResults(null)
+    
+    // Validate dates before submitting
+    if (!validateFormDates('one-way')) {
+      return
+    }
+
+    // Convert date to YYYY-MM-DD format
+    const searchData = {
+      ...oneWayForm,
+      departure_date: oneWayForm.departure_date 
+        ? oneWayForm.departure_date.toISOString().split('T')[0]
+        : ''
+    }
+
+    setLoading(true)
 
     try {
-      const response = await airfareAPI.searchOneWay(oneWayForm, selectedTrip || null)
+      console.log('Submitting search with data:', searchData)
+      const response = await airfareAPI.searchOneWay(searchData, selectedTrip || null)
       setResults(response.data)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Search failed')
+      console.error('Search error:', err)
+      let errorMessage = 'Search failed'
+      if (err.response?.data?.detail) {
+        errorMessage = err.response.data.detail
+      } else if (err.message) {
+        errorMessage = err.message
+      } else if (err.code === 'ECONNABORTED') {
+        errorMessage = 'Request timeout. Please try again.'
+      } else if (err.message === 'Network Error' || err.code === 'ERR_NETWORK') {
+        errorMessage = 'Cannot connect to server. Make sure the backend is running on http://localhost:8000'
+      }
+      setError(errorMessage)
     } finally {
       setLoading(false)
     }
@@ -67,15 +97,44 @@ function AirfareSearch() {
 
   const handleReturnSearch = async (e) => {
     e.preventDefault()
-    setLoading(true)
     setError('')
     setResults(null)
+    
+    // Validate dates before submitting
+    if (!validateFormDates('return')) {
+      return
+    }
+
+    // Convert dates to YYYY-MM-DD format
+    const searchData = {
+      ...returnForm,
+      departure_date: returnForm.departure_date 
+        ? returnForm.departure_date.toISOString().split('T')[0]
+        : '',
+      return_date: returnForm.return_date 
+        ? returnForm.return_date.toISOString().split('T')[0]
+        : ''
+    }
+
+    setLoading(true)
 
     try {
-      const response = await airfareAPI.searchReturn(returnForm, selectedTrip || null)
+      console.log('Submitting search with data:', searchData)
+      const response = await airfareAPI.searchReturn(searchData, selectedTrip || null)
       setResults(response.data)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Search failed')
+      console.error('Search error:', err)
+      let errorMessage = 'Search failed'
+      if (err.response?.data?.detail) {
+        errorMessage = err.response.data.detail
+      } else if (err.message) {
+        errorMessage = err.message
+      } else if (err.code === 'ECONNABORTED') {
+        errorMessage = 'Request timeout. Please try again.'
+      } else if (err.message === 'Network Error' || err.code === 'ERR_NETWORK') {
+        errorMessage = 'Cannot connect to server. Make sure the backend is running on http://localhost:8000'
+      }
+      setError(errorMessage)
     } finally {
       setLoading(false)
     }
@@ -83,22 +142,45 @@ function AirfareSearch() {
 
   const handleMultiCitySearch = async (e) => {
     e.preventDefault()
-    setLoading(true)
     setError('')
     setResults(null)
+    
+    // Validate dates before submitting
+    if (!validateFormDates('multi-city')) {
+      return
+    }
+
+    // Convert dates to YYYY-MM-DD format
+    const searchData = {
+      segments: multiCityForm.segments.map(seg => ({
+        ...seg,
+        departure_date: seg.departure_date 
+          ? seg.departure_date.toISOString().split('T')[0]
+          : ''
+      })),
+      passengers: multiCityForm.passengers,
+      cabin_class: multiCityForm.cabin_class,
+    }
+
+    setLoading(true)
 
     try {
-      const response = await airfareAPI.searchMultiCity(
-        {
-          segments: multiCityForm.segments,
-          passengers: multiCityForm.passengers,
-          cabin_class: multiCityForm.cabin_class,
-        },
-        selectedTrip || null
-      )
+      console.log('Submitting search with data:', searchData)
+      const response = await airfareAPI.searchMultiCity(searchData, selectedTrip || null)
       setResults(response.data)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Search failed')
+      console.error('Search error:', err)
+      let errorMessage = 'Search failed'
+      if (err.response?.data?.detail) {
+        errorMessage = err.response.data.detail
+      } else if (err.message) {
+        errorMessage = err.message
+      } else if (err.code === 'ECONNABORTED') {
+        errorMessage = 'Request timeout. Please try again.'
+      } else if (err.message === 'Network Error' || err.code === 'ERR_NETWORK') {
+        errorMessage = 'Cannot connect to server. Make sure the backend is running on http://localhost:8000'
+      }
+      setError(errorMessage)
     } finally {
       setLoading(false)
     }
@@ -107,7 +189,7 @@ function AirfareSearch() {
   const addSegment = () => {
     setMultiCityForm({
       ...multiCityForm,
-      segments: [...multiCityForm.segments, { origin: '', destination: '', departure_date: '' }],
+      segments: [...multiCityForm.segments, { origin: '', destination: '', departure_date: null }],
     })
   }
 
@@ -124,6 +206,117 @@ function AirfareSearch() {
     const newSegments = [...multiCityForm.segments]
     newSegments[index][field] = value
     setMultiCityForm({ ...multiCityForm, segments: newSegments })
+    
+    // Clear date errors when user updates
+    if (field === 'departure_date') {
+      setDateErrors({ ...dateErrors, [`multi-city-${index}`]: '' })
+    }
+    
+    // Clear origin/destination errors when user updates
+    if (field === 'origin' || field === 'destination') {
+      setDateErrors({ ...dateErrors, [`multi-city-${index}`]: '' })
+    }
+  }
+
+  // Validate date (Date object or string)
+  const validateDate = (dateValue, fieldName) => {
+    if (!dateValue) {
+      return 'Date is required'
+    }
+    
+    let date
+    if (dateValue instanceof Date) {
+      date = dateValue
+    } else if (typeof dateValue === 'string') {
+      // Check if it matches YYYY-MM-DD format
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/
+      if (!dateRegex.test(dateValue)) {
+        return 'Date must be in YYYY-MM-DD format (e.g., 2026-02-20)'
+      }
+      date = new Date(dateValue)
+    } else {
+      return 'Invalid date format'
+    }
+    
+    if (isNaN(date.getTime())) {
+      return 'Invalid date'
+    }
+    
+    // Check if date is in the future
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    if (date < today) {
+      return 'Date must be today or in the future'
+    }
+    
+    return null
+  }
+
+  // Validate all dates before submission
+  const validateFormDates = (formType) => {
+    const errors = {}
+    let hasErrors = false
+
+    if (formType === 'one-way') {
+      const error = validateDate(oneWayForm.departure_date, 'departure_date')
+      if (error) {
+        errors['one-way-departure'] = error
+        hasErrors = true
+      }
+    } else if (formType === 'return') {
+      const depError = validateDate(returnForm.departure_date, 'departure_date')
+      if (depError) {
+        errors['return-departure'] = depError
+        hasErrors = true
+      }
+      
+      const retError = validateDate(returnForm.return_date, 'return_date')
+      if (retError) {
+        errors['return-return'] = retError
+        hasErrors = true
+      }
+      
+      // Check return date is after departure date
+      if (!depError && !retError && returnForm.departure_date && returnForm.return_date) {
+        const depDate = returnForm.departure_date instanceof Date 
+          ? returnForm.departure_date 
+          : new Date(returnForm.departure_date)
+        const retDate = returnForm.return_date instanceof Date 
+          ? returnForm.return_date 
+          : new Date(returnForm.return_date)
+        if (retDate <= depDate) {
+          errors['return-return'] = 'Return date must be after departure date'
+          hasErrors = true
+        }
+      }
+    } else if (formType === 'multi-city') {
+      multiCityForm.segments.forEach((segment, index) => {
+        const error = validateDate(segment.departure_date, `segment-${index}`)
+        if (error) {
+          errors[`multi-city-${index}`] = error
+          hasErrors = true
+        }
+        
+        // Check each segment date is after previous segment
+        if (index > 0 && !error) {
+          const prevDateValue = multiCityForm.segments[index - 1].departure_date
+          const currDateValue = segment.departure_date
+          const prevDate = prevDateValue instanceof Date 
+            ? prevDateValue 
+            : new Date(prevDateValue)
+          const currDate = currDateValue instanceof Date 
+            ? currDateValue 
+            : new Date(currDateValue)
+          if (currDate <= prevDate) {
+            errors[`multi-city-${index}`] = 'Date must be after previous segment date'
+            hasErrors = true
+          }
+        }
+      })
+    }
+
+    setDateErrors(errors)
+    return !hasErrors
   }
 
   const renderFlightResults = (flights) => {
@@ -165,7 +358,7 @@ function AirfareSearch() {
           <div key={idx} className="flight-card">
             <div className="flight-header">
               <div>
-                <div className="segment-value">{flight.airline}</div>
+                <div className="segment-value">{flight.airline_name || flight.airline}</div>
                 <div className="segment-label">{flight.flight_number}</div>
               </div>
               <div className="flight-price">
@@ -256,34 +449,40 @@ function AirfareSearch() {
         {activeTab === 'one-way' && (
           <form onSubmit={handleOneWaySearch}>
             <div className="form-group">
-              <label>Origin (Airport Code or City)</label>
-              <input
-                type="text"
+              <AirportAutocomplete
+                label="Origin"
                 value={oneWayForm.origin}
-                onChange={(e) => setOneWayForm({ ...oneWayForm, origin: e.target.value })}
-                placeholder="e.g., JFK or New York"
+                onChange={(code) => setOneWayForm({ ...oneWayForm, origin: code })}
+                placeholder="Enter city or airport code (e.g., New York or JFK)"
                 required
               />
             </div>
             <div className="form-group">
-              <label>Destination (Airport Code or City)</label>
-              <input
-                type="text"
+              <AirportAutocomplete
+                label="Destination"
                 value={oneWayForm.destination}
-                onChange={(e) => setOneWayForm({ ...oneWayForm, destination: e.target.value })}
-                placeholder="e.g., LAX or Los Angeles"
+                onChange={(code) => setOneWayForm({ ...oneWayForm, destination: code })}
+                placeholder="Enter city or airport code (e.g., Los Angeles or LAX)"
                 required
               />
             </div>
             <div className="form-group">
               <label>Departure Date</label>
-              <input
-                type="date"
-                value={oneWayForm.departure_date}
-                onChange={(e) => setOneWayForm({ ...oneWayForm, departure_date: e.target.value })}
+              <DatePicker
+                selected={oneWayForm.departure_date}
+                onChange={(date) => {
+                  setOneWayForm({ ...oneWayForm, departure_date: date })
+                  setDateErrors({ ...dateErrors, 'one-way-departure': '' })
+                }}
+                minDate={new Date()}
+                dateFormat="yyyy-MM-dd"
+                placeholderText="Select departure date"
+                className="date-picker-input"
                 required
-                min={new Date().toISOString().split('T')[0]}
               />
+              {dateErrors['one-way-departure'] && (
+                <div className="date-error">{dateErrors['one-way-departure']}</div>
+              )}
             </div>
             <div className="form-group">
               <label>Passengers</label>
@@ -317,44 +516,58 @@ function AirfareSearch() {
         {activeTab === 'return' && (
           <form onSubmit={handleReturnSearch}>
             <div className="form-group">
-              <label>Origin (Airport Code or City)</label>
-              <input
-                type="text"
+              <AirportAutocomplete
+                label="Origin"
                 value={returnForm.origin}
-                onChange={(e) => setReturnForm({ ...returnForm, origin: e.target.value })}
-                placeholder="e.g., JFK or New York"
+                onChange={(code) => setReturnForm({ ...returnForm, origin: code })}
+                placeholder="Enter city or airport code (e.g., New York or JFK)"
                 required
               />
             </div>
             <div className="form-group">
-              <label>Destination (Airport Code or City)</label>
-              <input
-                type="text"
+              <AirportAutocomplete
+                label="Destination"
                 value={returnForm.destination}
-                onChange={(e) => setReturnForm({ ...returnForm, destination: e.target.value })}
-                placeholder="e.g., LAX or Los Angeles"
+                onChange={(code) => setReturnForm({ ...returnForm, destination: code })}
+                placeholder="Enter city or airport code (e.g., Los Angeles or LAX)"
                 required
               />
             </div>
             <div className="form-group">
               <label>Departure Date</label>
-              <input
-                type="date"
-                value={returnForm.departure_date}
-                onChange={(e) => setReturnForm({ ...returnForm, departure_date: e.target.value })}
+              <DatePicker
+                selected={returnForm.departure_date}
+                onChange={(date) => {
+                  setReturnForm({ ...returnForm, departure_date: date })
+                  setDateErrors({ ...dateErrors, 'return-departure': '' })
+                }}
+                minDate={new Date()}
+                dateFormat="yyyy-MM-dd"
+                placeholderText="Select departure date"
+                className="date-picker-input"
                 required
-                min={new Date().toISOString().split('T')[0]}
               />
+              {dateErrors['return-departure'] && (
+                <div className="date-error">{dateErrors['return-departure']}</div>
+              )}
             </div>
             <div className="form-group">
               <label>Return Date</label>
-              <input
-                type="date"
-                value={returnForm.return_date}
-                onChange={(e) => setReturnForm({ ...returnForm, return_date: e.target.value })}
+              <DatePicker
+                selected={returnForm.return_date}
+                onChange={(date) => {
+                  setReturnForm({ ...returnForm, return_date: date })
+                  setDateErrors({ ...dateErrors, 'return-return': '' })
+                }}
+                minDate={returnForm.departure_date || new Date()}
+                dateFormat="yyyy-MM-dd"
+                placeholderText="Select return date"
+                className="date-picker-input"
                 required
-                min={returnForm.departure_date || new Date().toISOString().split('T')[0]}
               />
+              {dateErrors['return-return'] && (
+                <div className="date-error">{dateErrors['return-return']}</div>
+              )}
             </div>
             <div className="form-group">
               <label>Passengers</label>
@@ -392,34 +605,42 @@ function AirfareSearch() {
                 <h4>Segment {index + 1}</h4>
                 <div className="segment-form-row">
                   <div className="form-group">
-                    <label>Origin</label>
-                    <input
-                      type="text"
+                    <AirportAutocomplete
+                      label="Origin"
                       value={segment.origin}
-                      onChange={(e) => updateSegment(index, 'origin', e.target.value)}
-                      placeholder="e.g., JFK"
+                      onChange={(code) => updateSegment(index, 'origin', code)}
+                      placeholder="Enter city or airport code"
                       required
                     />
                   </div>
                   <div className="form-group">
-                    <label>Destination</label>
-                    <input
-                      type="text"
+                    <AirportAutocomplete
+                      label="Destination"
                       value={segment.destination}
-                      onChange={(e) => updateSegment(index, 'destination', e.target.value)}
-                      placeholder="e.g., LAX"
+                      onChange={(code) => updateSegment(index, 'destination', code)}
+                      placeholder="Enter city or airport code"
                       required
                     />
                   </div>
                   <div className="form-group">
                     <label>Departure Date</label>
-                    <input
-                      type="date"
-                      value={segment.departure_date}
-                      onChange={(e) => updateSegment(index, 'departure_date', e.target.value)}
+                    <DatePicker
+                      selected={segment.departure_date}
+                      onChange={(date) => {
+                        updateSegment(index, 'departure_date', date)
+                        setDateErrors({ ...dateErrors, [`multi-city-${index}`]: '' })
+                      }}
+                      minDate={index > 0 && multiCityForm.segments[index - 1].departure_date 
+                        ? multiCityForm.segments[index - 1].departure_date 
+                        : new Date()}
+                      dateFormat="yyyy-MM-dd"
+                      placeholderText="Select departure date"
+                      className="date-picker-input"
                       required
-                      min={index > 0 ? multiCityForm.segments[index - 1].departure_date : new Date().toISOString().split('T')[0]}
                     />
+                    {dateErrors[`multi-city-${index}`] && (
+                      <div className="date-error">{dateErrors[`multi-city-${index}`]}</div>
+                    )}
                   </div>
                 </div>
                 {multiCityForm.segments.length > 1 && (

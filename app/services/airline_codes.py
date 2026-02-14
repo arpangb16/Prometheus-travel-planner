@@ -1,0 +1,72 @@
+# Airline code to name mapping
+AIRLINE_NAMES = {
+    # US Airlines
+    "AA": "American Airlines",
+    "DL": "Delta Air Lines",
+    "UA": "United Airlines",
+    "WN": "Southwest Airlines",
+    "B6": "JetBlue Airways",
+    "AS": "Alaska Airlines",
+    "F9": "Frontier Airlines",
+    "NK": "Spirit Airlines",
+    "SY": "Sun Country Airlines",
+    "G4": "Allegiant Air",
+    "YX": "Republic Airways",
+    "9E": "Endeavor Air",
+    "OH": "PSA Airlines",
+    "MQ": "Envoy Air",
+    "YX": "Republic Airways",
+    
+    # International Airlines
+    "BA": "British Airways",
+    "AF": "Air France",
+    "LH": "Lufthansa",
+    "KL": "KLM Royal Dutch Airlines",
+    "IB": "Iberia",
+    "AZ": "Alitalia",
+    "SN": "Brussels Airlines",
+    "LX": "Swiss International Air Lines",
+    "OS": "Austrian Airlines",
+    "EI": "Aer Lingus",
+    "SK": "SAS Scandinavian Airlines",
+    "AY": "Finnair",
+    "DY": "Norwegian Air Shuttle",
+    "FR": "Ryanair",
+    "U2": "easyJet",
+    "TK": "Turkish Airlines",
+    "EK": "Emirates",
+    "QR": "Qatar Airways",
+    "EY": "Etihad Airways",
+    "SV": "Saudi Arabian Airlines",
+    "QF": "Qantas",
+    "NZ": "Air New Zealand",
+    "CX": "Cathay Pacific",
+    "SQ": "Singapore Airlines",
+    "TG": "Thai Airways",
+    "MH": "Malaysia Airlines",
+    "JL": "Japan Airlines",
+    "NH": "All Nippon Airways",
+    "KE": "Korean Air",
+    "OZ": "Asiana Airlines",
+    "CA": "Air China",
+    "MU": "China Eastern Airlines",
+    "CZ": "China Southern Airlines",
+    "AI": "Air India",
+    "6E": "IndiGo",
+    "AC": "Air Canada",
+    "WS": "WestJet",
+    "AM": "Aeromexico",
+    "LA": "LATAM Airlines",
+    "G3": "Gol Transportes Aéreos",
+    "JJ": "LATAM Brasil",
+    "AR": "Aerolíneas Argentinas",
+    "AV": "Avianca",
+    "CM": "Copa Airlines",
+}
+
+def get_airline_name(code: str) -> str:
+    """Get airline name from IATA code"""
+    if not code:
+        return "Unknown Airline"
+    return AIRLINE_NAMES.get(code.upper(), code.upper())  # Return code if not found
+

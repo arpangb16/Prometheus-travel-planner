@@ -1,13 +1,34 @@
 import axios from 'axios'
 
-const API_BASE_URL = 'http://localhost:8000'
+// Use relative path to leverage Vite proxy in development
+// This avoids CORS issues since requests go through the same origin
+const API_BASE_URL = import.meta.env.DEV 
+  ? '' // Use relative paths in development (Vite proxy will handle it)
+  : 'http://127.0.0.1:8000' // Direct URL in production
 
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
+  timeout: 30000, // 30 second timeout
 })
+
+// Add error interceptor for better error messages
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.code === 'ECONNABORTED') {
+      console.error('Request timeout:', error)
+      return Promise.reject(new Error('Request timeout. Please try again.'))
+    }
+    if (error.message === 'Network Error') {
+      console.error('Network error:', error)
+      return Promise.reject(new Error('Cannot connect to server. Make sure the backend is running on http://localhost:8000'))
+    }
+    return Promise.reject(error)
+  }
+)
 
 // Authentication disabled - no token needed
 // api.interceptors.request.use(

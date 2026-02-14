@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi.exceptions import RequestValidationError
 from typing import List, Optional
 from app.models import (
     AirfareSearchOneWay,
@@ -39,6 +40,9 @@ async def search_one_way(
 ):
     """Search for one-way flights"""
     try:
+        # Log the search request for debugging
+        print(f"Search request: origin={search.origin}, destination={search.destination}, date={search.departure_date}, passengers={search.passengers}")
+        
         # Search flights
         flights = await amadeus.search_flights(
             origin=search.origin,
@@ -47,62 +51,102 @@ async def search_one_way(
             passengers=search.passengers,
             cabin_class=search.cabin_class or "economy"
         )
+    except ValueError as e:
+        # Amadeus API connection or validation errors
+        error_msg = str(e)
+        print(f"Amadeus API error: {error_msg}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_msg
+        )
     except Exception as e:
+        # Other unexpected errors
+        import traceback
+        error_trace = traceback.format_exc()
+        error_msg = f"Flight search failed: {str(e)}"
+        print(f"Unexpected error: {error_msg}")
+        print(f"Traceback:\n{error_trace}")
+        # Return more detailed error in development
+        detail_msg = error_msg
+        if "detail" in str(e).lower() or "error" in str(e).lower():
+            detail_msg = str(e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Flight search failed: {str(e)}"
+            detail=detail_msg
         )
     
     # Save search to database
-    conn = db.connect()
-    conn.execute(
-        """
-        INSERT INTO airfare_searches 
-        (trip_id, user_id, search_type, origin, destination, departure_date, passengers, search_results)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        [
-            trip_id,
-            get_default_user_id(),
-            "one-way",
-            search.origin,
-            search.destination,
-            search.departure_date,
-            search.passengers,
-            json.dumps(flights)
-        ]
-    )
-    
-    conn.commit()
-    
-    # Get the created search
-    result = conn.execute(
-        """
-        SELECT id, trip_id, search_type, origin, destination, departure_date, return_date, passengers, search_results, created_at
-        FROM airfare_searches 
-        WHERE user_id = ? AND origin = ? AND destination = ? AND departure_date = ?
-        ORDER BY created_at DESC LIMIT 1
-        """,
-        [get_default_user_id(), search.origin, search.destination, search.departure_date]
-    ).fetchone()
-    
-    if not result:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to save search"
+    try:
+        conn = db.connect()
+        conn.execute(
+            """
+            INSERT INTO airfare_searches 
+            (trip_id, user_id, search_type, origin, destination, departure_date, passengers, search_results)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                trip_id,
+                get_default_user_id(),
+                "one-way",
+                search.origin,
+                search.destination,
+                str(search.departure_date),  # Convert date to string
+                search.passengers,
+                json.dumps(flights)
+            ]
         )
+        
+        conn.commit()
+    except Exception as db_error:
+        print(f"Database error: {db_error}")
+        import traceback
+        traceback.print_exc()
+        # Continue even if database save fails - return the search results
+        pass
     
+    # Get the created search (or return results directly if DB save failed)
+    try:
+        result = conn.execute(
+            """
+            SELECT id, trip_id, search_type, origin, destination, departure_date, return_date, passengers, search_results, created_at
+            FROM airfare_searches 
+            WHERE user_id = ? AND origin = ? AND destination = ? AND departure_date = ?
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            [get_default_user_id(), search.origin, search.destination, str(search.departure_date)]
+        ).fetchone()
+        
+        if result:
+            return {
+                "id": result[0],
+                "trip_id": result[1],
+                "search_type": result[2],
+                "origin": result[3],
+                "destination": result[4],
+                "departure_date": result[5],
+                "return_date": result[6],
+                "passengers": result[7],
+                "search_results": json.loads(result[8]) if result[8] else None,
+                "created_at": result[9]
+            }
+    except Exception as db_error:
+        print(f"Database query error: {db_error}")
+        import traceback
+        traceback.print_exc()
+        # Fall through to return results directly
+    
+    # Return results directly if database operations failed
     return {
-        "id": result[0],
-        "trip_id": result[1],
-        "search_type": result[2],
-        "origin": result[3],
-        "destination": result[4],
-        "departure_date": result[5],
-        "return_date": result[6],
-        "passengers": result[7],
-        "search_results": json.loads(result[8]) if result[8] else None,
-        "created_at": result[9]
+        "id": None,
+        "trip_id": trip_id,
+        "search_type": "one-way",
+        "origin": search.origin,
+        "destination": search.destination,
+        "departure_date": str(search.departure_date),
+        "return_date": None,
+        "passengers": search.passengers,
+        "search_results": flights,
+        "created_at": None
     }
 
 
@@ -122,7 +166,14 @@ async def search_return(
             passengers=search.passengers,
             cabin_class=search.cabin_class or "economy"
         )
+    except ValueError as e:
+        # Amadeus API connection or validation errors
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
     except Exception as e:
+        # Other unexpected errors
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Flight search failed: {str(e)}"
@@ -190,22 +241,29 @@ async def search_multi_city(
     """Search for multi-city flights"""
     try:
         # Convert segments to dict format
-    segments_dict = [
-        {
-            "origin": seg.origin,
-            "destination": seg.destination,
-            "departure_date": seg.departure_date
-        }
-        for seg in search.segments
-    ]
-    
-    # Search flights for all segments
-    all_segments = await amadeus.search_multi_city(
-        segments=segments_dict,
-        passengers=search.passengers,
-        cabin_class=search.cabin_class or "economy"
+        segments_dict = [
+            {
+                "origin": seg.origin,
+                "destination": seg.destination,
+                "departure_date": seg.departure_date
+            }
+            for seg in search.segments
+        ]
+        
+        # Search flights for all segments
+        all_segments = await amadeus.search_multi_city(
+            segments=segments_dict,
+            passengers=search.passengers,
+            cabin_class=search.cabin_class or "economy"
+        )
+    except ValueError as e:
+        # Amadeus API connection or validation errors
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
         )
     except Exception as e:
+        # Other unexpected errors
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Flight search failed: {str(e)}"
